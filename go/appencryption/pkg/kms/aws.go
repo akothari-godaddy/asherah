@@ -10,11 +10,9 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/client"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/kms"
-	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/pkg/errors"
 	"github.com/rcrowley/go-metrics"
 
@@ -61,58 +59,23 @@ func newAWSKMSClient(sess client.ConfigProvider, region, arn string) AWSKMSClien
 	}
 }
 
-type TemporaryCredentials struct {
-	AccessKeyID     string
-	SecretAccessKey string
-	SessionToken    string
-	Expires         time.Time
-}
-
-func createAWSSession(region string, creds *TemporaryCredentials) (*session.Session, error) {
-	cg := aws.Config{Region: &region, Credentials: credentials.NewStaticCredentials(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken)}
-	sess, err := session.NewSession(&cg)
-	if err != nil {
-		return nil, err
-	}
-	return sess, nil
-}
-
 // createAWSKMSClients creates a client for each region in the arn map.
-func createAWSKMSClients(arnMap map[string]string) ([]AWSKMSClient, error) {
+func createAWSKMSClients(arnMap map[string]string, awsSession *session.Session) ([]AWSKMSClient, error) {
+	if awsSession != nil {
+		clients := make([]AWSKMSClient, 0)
+
+		for region, arn := range arnMap {
+			clients = append(clients, newAWSKMSClient(awsSession, region, arn))
+		}
+
+		return clients, nil
+	}
+
 	sess, err := session.NewSession()
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create new session")
 	}
-
-	svc := sts.New(sess)
-
-	roleToAssumeArn := "arn:aws:iam::321498237782:role/GD-AWS-USA-CPO-ProfilesAPI-Dev-Deploy"
-	fmt.Println("roleToAssumeArn: ", roleToAssumeArn)
-	roleSessionName := "exampleSessionName" // A name for the session
-
-	params := &sts.AssumeRoleInput{
-		RoleArn:         aws.String(roleToAssumeArn), // Required
-		RoleSessionName: aws.String(roleSessionName), // Required
-		DurationSeconds: aws.Int64(3600),             // Optional: Duration in seconds
-	}
-
-	result, err := svc.AssumeRole(params)
-	if err != nil {
-		fmt.Println("Error assuming role ", err)
-
-	}
-
-	fmt.Println("Assumed Role Successfully: ", result)
-
-	creds := &TemporaryCredentials{
-		AccessKeyID:     *result.Credentials.AccessKeyId,
-		Expires:         *result.Credentials.Expiration,
-		SecretAccessKey: *result.Credentials.SecretAccessKey,
-		SessionToken:    *result.Credentials.SessionToken,
-	}
-
-	sess, err = createAWSSession("us-west-2", creds)
 
 	clients := make([]AWSKMSClient, 0)
 
@@ -141,22 +104,22 @@ func sortClients(preferredRegion string, clients []AWSKMSClient) []AWSKMSClient 
 
 // NewAWS returns a new AWSKMS used for encrypting/decrypting
 // keys with a master key.
-func NewAWS(crypto appencryption.AEAD, preferredRegion string, arnMap map[string]string) (*AWSKMS, error) {
-	return newAWS(crypto, preferredRegion, awsARNMap(arnMap))
+func NewAWS(crypto appencryption.AEAD, preferredRegion string, arnMap map[string]string, awsSession *session.Session) (*AWSKMS, error) {
+	return newAWS(crypto, preferredRegion, awsARNMap(arnMap), awsSession)
 }
 
 type awsARNMap map[string]string
 
-func (a awsARNMap) createAWSKMSClients() ([]AWSKMSClient, error) {
-	return createAWSKMSClients(a)
+func (a awsARNMap) createAWSKMSClients(awsSession *session.Session) ([]AWSKMSClient, error) {
+	return createAWSKMSClients(a, awsSession)
 }
 
 type clientMapper interface {
-	createAWSKMSClients() ([]AWSKMSClient, error)
+	createAWSKMSClients(*session.Session) ([]AWSKMSClient, error)
 }
 
-func newAWS(crypto appencryption.AEAD, preferredRegion string, arnMap clientMapper) (*AWSKMS, error) {
-	clients, err := arnMap.createAWSKMSClients()
+func newAWS(crypto appencryption.AEAD, preferredRegion string, arnMap clientMapper, awsSession *session.Session) (*AWSKMS, error) {
+	clients, err := arnMap.createAWSKMSClients(awsSession)
 	if err != nil {
 		return nil, err
 	}
