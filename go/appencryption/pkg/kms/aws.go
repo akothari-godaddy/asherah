@@ -8,11 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/client"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/pkg/errors"
 	"github.com/rcrowley/go-metrics"
 
@@ -37,50 +36,46 @@ var (
 // KMS is implemented by the client in the kms package from the AWS SDK.
 // We only use a subset of methods defined below.
 type KMS interface {
-	EncryptWithContext(aws.Context, *kms.EncryptInput, ...request.Option) (*kms.EncryptOutput, error)
-	GenerateDataKeyWithContext(aws.Context, *kms.GenerateDataKeyInput, ...request.Option) (*kms.GenerateDataKeyOutput, error)
-	DecryptWithContext(ctx aws.Context, input *kms.DecryptInput, opts ...request.Option) (*kms.DecryptOutput, error)
+	EncryptWithContext(context.Context, *kms.EncryptInput, ...request.Option) (*kms.EncryptOutput, error)
+	GenerateDataKeyWithContext(context.Context, *kms.GenerateDataKeyInput, ...request.Option) (*kms.GenerateDataKeyOutput, error)
+	DecryptWithContext(ctx context.Context, input *kms.DecryptInput, opts ...request.Option) (*kms.DecryptOutput, error)
 }
 
 // AWSKMSClient contains a KMS client and region information used for
 // encrypting a key in KMS.
 type AWSKMSClient struct {
-	KMS    KMS
 	Region string
 	ARN    string
+	Client *kms.Client
 }
 
 // newAWSKMSClient returns a new AWSKMSClient struct with a new KMS client.
-func newAWSKMSClient(sess client.ConfigProvider, region, arn string) AWSKMSClient {
+func newAWSKMSClient(cfg *aws.Config, region, arn string) AWSKMSClient {
+	cfg.Region = region
+	client := kms.NewFromConfig(*cfg)
 	return AWSKMSClient{
-		KMS:    clientFactory(sess, aws.NewConfig().WithRegion(region)),
+		Client: client,
 		Region: region,
 		ARN:    arn,
 	}
 }
 
 // createAWSKMSClients creates a client for each region in the arn map.
-func createAWSKMSClients(arnMap map[string]string, awsSession *session.Session) ([]AWSKMSClient, error) {
-	if awsSession != nil {
+func createAWSKMSClients(arnMap map[string]string, cfg *aws.Config) ([]AWSKMSClient, error) {
+	if cfg != nil {
 		clients := make([]AWSKMSClient, 0)
 
 		for region, arn := range arnMap {
-			clients = append(clients, newAWSKMSClient(awsSession, region, arn))
+			clients = append(clients, newAWSKMSClient(cfg, region, arn))
 		}
 
 		return clients, nil
 	}
 
-	sess, err := session.NewSession()
-
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to create new session")
-	}
-
 	clients := make([]AWSKMSClient, 0)
 
 	for region, arn := range arnMap {
-		clients = append(clients, newAWSKMSClient(sess, region, arn))
+		clients = append(clients, newAWSKMSClient(cfg, region, arn))
 	}
 
 	return clients, nil
@@ -104,22 +99,22 @@ func sortClients(preferredRegion string, clients []AWSKMSClient) []AWSKMSClient 
 
 // NewAWS returns a new AWSKMS used for encrypting/decrypting
 // keys with a master key.
-func NewAWS(crypto appencryption.AEAD, preferredRegion string, arnMap map[string]string, awsSession *session.Session) (*AWSKMS, error) {
-	return newAWS(crypto, preferredRegion, awsARNMap(arnMap), awsSession)
+func NewAWS(crypto appencryption.AEAD, preferredRegion string, arnMap map[string]string, cfg *aws.Config) (*AWSKMS, error) {
+	return newAWS(crypto, preferredRegion, awsARNMap(arnMap), cfg)
 }
 
 type awsARNMap map[string]string
 
-func (a awsARNMap) createAWSKMSClients(awsSession *session.Session) ([]AWSKMSClient, error) {
-	return createAWSKMSClients(a, awsSession)
+func (a awsARNMap) createAWSKMSClients(cfg *aws.Config) ([]AWSKMSClient, error) {
+	return createAWSKMSClients(a, cfg)
 }
 
 type clientMapper interface {
-	createAWSKMSClients(*session.Session) ([]AWSKMSClient, error)
+	createAWSKMSClients(*aws.Config) ([]AWSKMSClient, error)
 }
 
-func newAWS(crypto appencryption.AEAD, preferredRegion string, arnMap clientMapper, awsSession *session.Session) (*AWSKMS, error) {
-	clients, err := arnMap.createAWSKMSClients(awsSession)
+func newAWS(crypto appencryption.AEAD, preferredRegion string, arnMap clientMapper, cfg *aws.Config) (*AWSKMS, error) {
+	clients, err := arnMap.createAWSKMSClients(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +211,7 @@ func encryptAllRegions(ctx context.Context, resp *kms.GenerateDataKeyOutput, cli
 
 				defer encryptKeyTimer.UpdateSince(time.Now())
 
-				encResp, err := c.KMS.EncryptWithContext(ctx, &kms.EncryptInput{
+				encResp, err := c.Client.Encrypt(ctx, &kms.EncryptInput{
 					KeyId:     aws.String(c.ARN),
 					Plaintext: resp.Plaintext,
 				})
@@ -252,9 +247,9 @@ func generateDataKey(ctx context.Context, clients []AWSKMSClient) (*kms.Generate
 
 		start := time.Now()
 
-		resp, err := c.KMS.GenerateDataKeyWithContext(ctx, &kms.GenerateDataKeyInput{
+		resp, err := c.Client.GenerateDataKey(ctx, &kms.GenerateDataKeyInput{
 			KeyId:   &c.ARN,
-			KeySpec: aws.String(kms.DataKeySpecAes256),
+			KeySpec: types.DataKeySpecAes256,
 		})
 
 		generateDataKeyTimer := metrics.GetOrRegisterTimer(fmt.Sprintf("%s.kms.aws.generatedatakey.%s", appencryption.MetricsPrefix, c.Region), nil)
@@ -285,7 +280,7 @@ func (m *AWSKMS) DecryptKey(ctx context.Context, keyBytes []byte) ([]byte, error
 		if key := en.KMSKEKs.get(c.Region); key != nil {
 			start := time.Now()
 
-			output, err := c.KMS.DecryptWithContext(ctx, &kms.DecryptInput{
+			output, err := c.Client.Decrypt(ctx, &kms.DecryptInput{
 				CiphertextBlob: key.EncryptedKEK,
 			})
 
