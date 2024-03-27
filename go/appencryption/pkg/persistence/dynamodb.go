@@ -9,9 +9,9 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
 	"github.com/aws/smithy-go"
 	"github.com/godaddy/asherah/go/appencryption"
 	"github.com/pkg/errors"
@@ -140,12 +140,14 @@ func (d *DynamoDBMetastore) LoadLatest(ctx context.Context, keyID string) (*appe
 
 	// Execute the query
 	res, err := d.svc.Query(ctx, &dynamodb.QueryInput{
-		TableName:              aws.String(d.tableName),
-		KeyConditionExpression: expr.KeyCondition(),
-		ProjectionExpression:   expr.Projection(),
-		ScanIndexForward:       aws.Bool(false), // Ensure we're scanning in reverse order
-		Limit:                  aws.Int32(1),    // We only want the latest (most recent) record
-		ConsistentRead:         aws.Bool(true),
+		TableName:                 aws.String(d.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ProjectionExpression:      expr.Projection(),
+		ScanIndexForward:          aws.Bool(false), // Ensure we're scanning in reverse order
+		Limit:                     aws.Int32(1),    // We only want the latest (most recent) record
+		ConsistentRead:            aws.Bool(true),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
 		return nil, err
