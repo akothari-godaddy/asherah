@@ -3,8 +3,9 @@ package persistence_test
 import (
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+
 	"github.com/stretchr/testify/assert"
 
 	"github.com/godaddy/asherah/go/appencryption/pkg/persistence"

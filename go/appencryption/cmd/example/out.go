@@ -106,8 +106,8 @@ func PrintRate(t metrics.Timer) {
 func PrintMetrics(action string, timer metrics.Timer) {
 	if timer.Count() == 0 {
 		if opts.ShowAll {
-			fmt.Println()
-			fmt.Println(aurora.Bold(aurora.Cyan(strings.Title(action))), aurora.Red("  Not run."))
+			// fmt.Println()
+			// fmt.Println(aurora.Bold(aurora.Cyan(strings.Title(action))), aurora.Red("  Not run."))
 		}
 		return
 	}
@@ -123,5 +123,5 @@ func PrintMetrics(action string, timer metrics.Timer) {
 
 	w.Flush()
 
-	fmt.Println()
+	// fmt.Println()
 }

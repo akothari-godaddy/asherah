@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/aws/smithy-go"
 	"github.com/godaddy/asherah/go/appencryption"
 	"github.com/pkg/errors"
 	"github.com/rcrowley/go-metrics"
@@ -87,20 +87,47 @@ func NewDynamoDBMetastore(cfg *aws.Config, opts ...DynamoDBMetastoreOption) *Dyn
 	return d
 }
 
-func parseResult(item map[string]types.AttributeValue) (*appencryption.EnvelopeKeyRecord, error) {
-	var record appencryption.EnvelopeKeyRecord
-	err := attributevalue.UnmarshalMap(item, &record)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to unmarshal DynamoDB item to EnvelopeKeyRecord")
+func parseResult(item types.AttributeValue) (*appencryption.EnvelopeKeyRecord, error) {
+	var record appencryption.KRecord
+
+	var finalRecord appencryption.EnvelopeKeyRecord
+	// output, err := json.MarshalIndent(item, "", "  ")
+	// if err != nil {
+	// 	log.Fatalf("failed to marshal QueryOutput, %v", err)
+	// }
+	// // fmt.Println(string(output))
+
+	if mapAttr, ok := item.(*types.AttributeValueMemberM); ok {
+		// Now you can access the attributes as a map
+		// fmt.Println("mapAttr: ", mapAttr.Value)
+		err := attributevalue.UnmarshalMap(mapAttr.Value, &record)
+		if err != nil {
+			log.Fatalf("failed to unmarshal AttributeValue map to struct: %v", err)
+		}
 	}
 
-	return &record, nil
+	// Decode the base64-encoded EncryptedKey
+	decodedKey, err := base64.StdEncoding.DecodeString(record.Key)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to decode EncryptedKey")
+	}
+
+	// fmt.Println("decodedKey: ", string(decodedKey))
+
+	// fmt.Println("record: ", record, record.Revoked)
+
+	finalRecord = appencryption.EnvelopeKeyRecord{EncryptedKey: []byte(decodedKey), Created: record.Created, ParentKeyMeta: record.ParentKeyMeta}
+
+	// fmt.Println("finalRecord: ", finalRecord.ParentKeyMeta)
+
+	return &finalRecord, nil
 }
 
 // Load retrieves the envelope key record for the given keyID and created time.
 func (d *DynamoDBMetastore) Load(ctx context.Context, keyID string, created int64) (*appencryption.EnvelopeKeyRecord, error) {
 	defer loadDynamoDBTimer.UpdateSince(time.Now())
 
+	// fmt.Println("keyID: ", keyID, "created: ", created)
 	key := map[string]types.AttributeValue{
 		partitionKey: &types.AttributeValueMemberS{Value: keyID},
 		sortKey:      &types.AttributeValueMemberN{Value: strconv.FormatInt(created, 10)},
@@ -111,6 +138,8 @@ func (d *DynamoDBMetastore) Load(ctx context.Context, keyID string, created int6
 		Key:            key,
 		ConsistentRead: aws.Bool(true),
 	})
+
+	// fmt.Println("load", "out: ", out, out.Item, "err: ", err)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to load item from DynamoDB")
 	}
@@ -119,13 +148,15 @@ func (d *DynamoDBMetastore) Load(ctx context.Context, keyID string, created int6
 		return nil, nil // Not found
 	}
 
-	return parseResult(out.Item)
+	return parseResult(out.Item[keyRecord])
 }
 
 // LoadLatest returns the newest record matching the keyID.
 // The return value will be nil if not already present.
 func (d *DynamoDBMetastore) LoadLatest(ctx context.Context, keyID string) (*appencryption.EnvelopeKeyRecord, error) {
 	defer loadLatestDynamoDBTimer.UpdateSince(time.Now())
+
+	// fmt.Println("keyID: ", keyID)
 
 	// Define the key condition for querying by partition key (keyID)
 	keyCond := expression.Key(partitionKey).Equal(expression.Value(keyID))
@@ -149,8 +180,9 @@ func (d *DynamoDBMetastore) LoadLatest(ctx context.Context, keyID string) (*appe
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 	})
+
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "failed to query DynamoDB")
 	}
 
 	if len(res.Items) == 0 {
@@ -158,7 +190,7 @@ func (d *DynamoDBMetastore) LoadLatest(ctx context.Context, keyID string) (*appe
 	}
 
 	// Parse the result
-	return parseResult(res.Items[0])
+	return parseResult(res.Items[0][keyRecord])
 }
 
 // DynamoDBEnvelope is used to convert the EncryptedKey to a Base64 encoded string
@@ -175,42 +207,49 @@ type DynamoDBEnvelope struct {
 // one is not present, the value will be inserted and we return true.
 func (d *DynamoDBMetastore) Store(ctx context.Context, keyID string, created int64, envelope *appencryption.EnvelopeKeyRecord) (bool, error) {
 	defer storeDynamoDBTimer.UpdateSince(time.Now())
-
+	// fmt.Println("Store keyID: ", keyID)
 	// Convert your envelope key record to a DynamoDBEnvelope for storage
-	encryptedKeyBase64 := base64.StdEncoding.EncodeToString(envelope.EncryptedKey)
-	dynamoEnvelope := DynamoDBEnvelope{
+	en := &DynamoDBEnvelope{
 		Revoked:       envelope.Revoked,
 		Created:       envelope.Created,
-		EncryptedKey:  encryptedKeyBase64,
+		EncryptedKey:  base64.StdEncoding.EncodeToString(envelope.EncryptedKey),
 		ParentKeyMeta: envelope.ParentKeyMeta,
 	}
 
-	// Marshal the DynamoDBEnvelope to a DynamoDB attribute value map
-	item, err := attributevalue.MarshalMap(dynamoEnvelope)
+	var record appencryption.KRecord
+
+	record.Key = en.EncryptedKey
+	record.Created = en.Created
+	record.ParentKeyMeta = en.ParentKeyMeta
+	record.Revoked = en.Revoked
+
+	// fmt.Println("Store record: ", record)
+
+	av, err := attributevalue.MarshalMap(record)
 	if err != nil {
-		return false, errors.Wrap(err, "failed to marshal envelope")
+		return false, fmt.Errorf("failed to marshal envelope: %w", err)
 	}
 
-	// Prepare the DynamoDB item with additional attributes for partitionKey and sortKey
-	item[partitionKey] = &types.AttributeValueMemberS{Value: keyID}
-	item[sortKey] = &types.AttributeValueMemberN{Value: strconv.FormatInt(created, 10)}
+	// Prepare the Item map
+	item := map[string]types.AttributeValue{
+		partitionKey: &types.AttributeValueMemberS{Value: keyID},                          // Adjust for actual partition key name
+		sortKey:      &types.AttributeValueMemberN{Value: strconv.FormatInt(created, 10)}, // Adjust for actual sort key name
+		keyRecord:    &types.AttributeValueMemberM{Value: av},                             // 'keyRecord' attribute
+	}
 
-	// Attempt to store the item using a conditional expression to avoid overwriting existing records
 	_, err = d.svc.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(d.tableName),
-		Item:      item,
-		// Conditional expression to ensure the item does not already exist
-		ConditionExpression: aws.String("attribute_not_exists(" + partitionKey + ") AND attribute_not_exists(" + sortKey + ")"),
+		Item:                item,
+		TableName:           aws.String(d.tableName),
+		ConditionExpression: aws.String("attribute_not_exists(" + partitionKey + ")"),
 	})
 
-	// Handle conditional check failure (i.e., item already exists) separately
+	// fmt.Println("store", "item: ", item, "err: ", err)
+	var conditionCheckFailedException *types.ConditionalCheckFailedException
 	if err != nil {
-		var ce *smithy.OperationError
-		if errors.As(err, &ce) && ce.Err.Error() == "ConditionalCheckFailedException" {
-			return false, nil // Item already exists, return false to indicate no store was made
+		if ok := errors.As(err, &conditionCheckFailedException); ok {
+			return false, fmt.Errorf("attempted to create duplicate key: %s, %d: %w", keyID, created, err)
 		}
-		// For other errors, wrap and return them
-		return false, errors.Wrap(err, "error storing key")
+		return false, fmt.Errorf("error storing key key: %s, %d: %w", keyID, created, err)
 	}
 
 	// If there's no error, the item was successfully stored

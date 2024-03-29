@@ -23,7 +23,6 @@ import (
 	smlog "github.com/godaddy/asherah/go/securememory/log"
 	"github.com/godaddy/asherah/go/securememory/memguard"
 	"github.com/jessevdk/go-flags"
-	"github.com/logrusorgru/aurora"
 	"github.com/pkg/errors"
 	"github.com/rcrowley/go-metrics"
 
@@ -163,7 +162,7 @@ func main() {
 	}
 
 	if opts.Verbose && len(f) > 0 {
-		fmt.Println(aurora.Cyan("Flags:"))
+		// fmt.Println(aurora.Cyan("Flags:"))
 		for _, flagV := range f {
 			fmt.Println(flagV)
 		}
@@ -312,7 +311,7 @@ func main() {
 				select {
 				case <-done:
 					fmt.Printf("\n\r\n")
-					fmt.Println()
+					// fmt.Println()
 					return
 				case <-ticker.C:
 					continue
@@ -391,9 +390,9 @@ func main() {
 			done <- true
 		}()
 
-		fmt.Println("Refusing to exit as per the no-exit flag (send SIGINT or SIGTERM to close)")
+		// fmt.Println("Refusing to exit as per the no-exit flag (send SIGINT or SIGTERM to close)")
 		<-done
-		fmt.Println("Exiting")
+		// fmt.Println("Exiting")
 	} else if opts.Verbose {
 		log.Println("sleeping 5 seconds...")
 		time.Sleep(5 * time.Second)

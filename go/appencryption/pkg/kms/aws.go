@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/kms/types"
-	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/pkg/errors"
 	"github.com/rcrowley/go-metrics"
 
@@ -36,9 +35,9 @@ var (
 // KMS is implemented by the client in the kms package from the AWS SDK.
 // We only use a subset of methods defined below.
 type KMS interface {
-	EncryptWithContext(context.Context, *kms.EncryptInput, ...request.Option) (*kms.EncryptOutput, error)
-	GenerateDataKeyWithContext(context.Context, *kms.GenerateDataKeyInput, ...request.Option) (*kms.GenerateDataKeyOutput, error)
-	DecryptWithContext(ctx context.Context, input *kms.DecryptInput, opts ...request.Option) (*kms.DecryptOutput, error)
+	Encrypt(ctx context.Context, params *kms.EncryptInput, optFns ...func(*kms.Options)) (*kms.EncryptOutput, error)
+	GenerateDataKey(ctx context.Context, params *kms.GenerateDataKeyInput, optFns ...func(*kms.Options)) (*kms.GenerateDataKeyOutput, error)
+	Decrypt(ctx context.Context, params *kms.DecryptInput, optFns ...func(*kms.Options)) (*kms.DecryptOutput, error)
 }
 
 // AWSKMSClient contains a KMS client and region information used for
@@ -51,13 +50,15 @@ type AWSKMSClient struct {
 
 // newAWSKMSClient returns a new AWSKMSClient struct with a new KMS client.
 func newAWSKMSClient(cfg *aws.Config, region, arn string) AWSKMSClient {
-	cfg.Region = region
-	client := kms.NewFromConfig(*cfg)
+	client := kms.NewFromConfig(*cfg, func(o *kms.Options) {
+		o.Region = region
+	})
 	return AWSKMSClient{
 		Client: client,
 		Region: region,
 		ARN:    arn,
 	}
+
 }
 
 // createAWSKMSClients creates a client for each region in the arn map.
@@ -159,6 +160,7 @@ type encryptionKey struct {
 // EncryptKey encrypts a byte slice in all supported regions and returns an envelope ready
 // to store in metastore.
 func (m *AWSKMS) EncryptKey(ctx context.Context, keyBytes []byte) ([]byte, error) {
+	// fmt.Println("EncryptKey keyBytes: ", string(keyBytes))
 	dataKey, err := generateDataKeyFunc(ctx, m.Clients)
 	if err != nil {
 		return nil, err
@@ -181,6 +183,8 @@ func (m *AWSKMS) EncryptKey(ctx context.Context, keyBytes []byte) ([]byte, error
 	for k := range encryptAllRegionsFunc(ctx, dataKey, m.Clients) {
 		kekEn.KMSKEKs = append(kekEn.KMSKEKs, k)
 	}
+
+	// fmt.Println("kekEn: ", kekEn)
 
 	b, err := json.Marshal(kekEn)
 	if err != nil {
@@ -270,7 +274,7 @@ func generateDataKey(ctx context.Context, clients []AWSKMSClient) (*kms.Generate
 // config is tried first, if this fails the remaining regions are tried.
 func (m *AWSKMS) DecryptKey(ctx context.Context, keyBytes []byte) ([]byte, error) {
 	var en envelope
-
+	// fmt.Println("keyBytes: ", string(keyBytes))
 	if err := json.Unmarshal(keyBytes, &en); err != nil {
 		return nil, errors.Wrap(err, "unable to unmarshal envelope")
 	}

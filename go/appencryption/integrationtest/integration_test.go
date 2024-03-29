@@ -149,7 +149,7 @@ func (s *IntegrationTestSuite) TestDynamoDBRegionSuffixBackwardsCompatibility() 
 	// Now decrypt the encrypted data via a new factory and session using a suffixed DynamoDBMetastore
 	factory := appencryption.NewSessionFactory(
 		&s.config,
-		testContext.NewMetastore(persistence.WithDynamoDBRegionSuffix(true)),
+		testContext.NewMetastore(persistence.WithDynamoDBRegionSuffix("us-west-2")),
 		s.kms,
 		s.c,
 	)
@@ -181,7 +181,7 @@ func (s *IntegrationTestSuite) TestDynamoDBRegionSuffix() {
 	var drr *appencryption.DataRowRecord
 
 	// build a new metastore with regional suffixing enabled
-	metastore := testContext.NewMetastore(persistence.WithDynamoDBRegionSuffix(true))
+	metastore := testContext.NewMetastore(persistence.WithDynamoDBRegionSuffix("us-west-2"))
 
 	factory := appencryption.NewSessionFactory(
 		&s.config,

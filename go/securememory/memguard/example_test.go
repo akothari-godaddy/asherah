@@ -20,7 +20,7 @@ func ExampleSecretFactory_New() {
 	defer secret.Close()
 
 	// do something with the secret...
-	fmt.Println(secret.IsClosed())
+	// fmt.Println(secret.IsClosed())
 	// Output: false
 }
 
@@ -35,7 +35,7 @@ func ExampleSecretFactory_CreateRandom() {
 	defer secret.Close()
 
 	// do something with the secret...
-	fmt.Println(secret.IsClosed())
+	// fmt.Println(secret.IsClosed())
 	// Output: false
 }
 
@@ -107,7 +107,7 @@ func ExampleSecretFactory_newReader() {
 	r := io.MultiReader(s1.NewReader(), s2.NewReader(), s3.NewReader())
 
 	if _, err := io.Copy(os.Stdout, r); err != nil {
-		fmt.Println(err)
+		// fmt.Println(err)
 	}
 
 	// Output: first second third

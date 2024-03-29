@@ -24,8 +24,8 @@ var (
 
 // KeyMeta contains the ID and Created timestamp for an encryption key.
 type KeyMeta struct {
-	ID      string `json:"KeyId"`
-	Created int64  `json:"Created"`
+	ID      string `json:"KeyId" dynamodbav:"KeyId"`
+	Created int64  `json:"Created" dynamodbav:"Created"`
 }
 
 // String returns a string with the KeyMeta values.
@@ -65,6 +65,13 @@ type EnvelopeKeyRecord struct {
 	ParentKeyMeta *KeyMeta `json:"ParentKeyMeta,omitempty"`
 }
 
+type KRecord struct {
+	Key           string   `dynamodbav:"Key"`
+	Created       int64    `dynamodbav:"Created"`
+	ParentKeyMeta *KeyMeta `dynamodbav:"ParentKeyMeta"`
+	Revoked       bool     `dynamodbav:"Revoked"`
+}
+
 // Verify envelopeEncryption implements the Encryption interface.
 var _ Encryption = (*envelopeEncryption)(nil)
 
@@ -97,6 +104,7 @@ func (e *envelopeEncryption) loadSystemKey(ctx context.Context, meta KeyMeta) (*
 // systemKeyFromEKR decrypts ekr using the key management service and returns a new CryptoKey containing the decrypted key data.
 func (e *envelopeEncryption) systemKeyFromEKR(ctx context.Context, ekr *EnvelopeKeyRecord) (*internal.CryptoKey, error) {
 	bytes, err := e.KMS.DecryptKey(ctx, ekr.EncryptedKey)
+
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +153,8 @@ func (e *envelopeEncryption) loadLatestOrCreateSystemKey(ctx context.Context, id
 		return e.systemKeyFromEKR(ctx, ekr)
 	}
 
+	// fmt.Println("ekr1")
+
 	// Create a new SK
 	sk, err := e.generateKey()
 	if err != nil {
@@ -168,6 +178,7 @@ func (e *envelopeEncryption) loadLatestOrCreateSystemKey(ctx context.Context, id
 	// attempted to save a duplicate key to the metastore because, if that's the case a new key
 	// was added sometime between our load and store attempts, so let's grab it and return it.
 	ekr, err = e.mustLoadLatest(ctx, id)
+	// fmt.Println("ekr2", string(ekr.EncryptedKey))
 	if err != nil {
 		// Oops! Looks like our assumption was incorrect and all we can do now is report the error.
 		return nil, err
@@ -182,6 +193,8 @@ func (e *envelopeEncryption) tryStoreSystemKey(ctx context.Context, sk *internal
 	encKey, err := internal.WithKeyFunc(sk, func(keyBytes []byte) ([]byte, error) {
 		return e.KMS.EncryptKey(ctx, keyBytes)
 	})
+
+	// fmt.Println("tryStoreSystemKey", string(encKey), err)
 	if err != nil {
 		return false, err
 	}
@@ -245,6 +258,8 @@ func (e *envelopeEncryption) createIntermediateKey(ctx context.Context) (*intern
 	sk, err := e.skCache.GetOrLoadLatest(e.partition.SystemKeyID(), func(meta KeyMeta) (*internal.CryptoKey, error) {
 		return e.loadLatestOrCreateSystemKey(ctx, meta.ID)
 	})
+
+	// fmt.Println("skcreateIntermediateKey", sk, err)
 	if err != nil {
 		return nil, err
 	}
@@ -315,9 +330,11 @@ func (e *envelopeEncryption) loadLatestOrCreateIntermediateKey(ctx context.Conte
 	if ikEkr == nil || e.isEnvelopeInvalid(ikEkr) {
 		return e.createIntermediateKey(ctx)
 	}
-
+	// fmt.Println("ikEkr", ikEkr.ParentKeyMeta)
 	// We've retrieved the latest IK and confirmed its validity. Now let's do the same for its parent key.
 	sk, err := e.getOrLoadSystemKey(ctx, *ikEkr.ParentKeyMeta)
+
+	// fmt.Println("sk", sk, err)
 	if err != nil {
 		return e.createIntermediateKey(ctx)
 	}
@@ -376,7 +393,6 @@ func decryptRow(ik internal.BytesFuncAccessor, drr DataRowRecord, crypto AEAD) (
 // parent information to decrypt the data in the future. It also takes a context used for cancellation.
 func (e *envelopeEncryption) EncryptPayload(ctx context.Context, data []byte) (*DataRowRecord, error) {
 	defer encryptTimer.UpdateSince(time.Now())
-
 	loader := func(meta KeyMeta) (*internal.CryptoKey, error) {
 		log.Debugf("[EncryptPayload] loadLatestOrCreateIntermediateKey: %s", meta.ID)
 		return e.loadLatestOrCreateIntermediateKey(ctx, meta.ID)
