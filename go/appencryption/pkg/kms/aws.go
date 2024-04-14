@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/client"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/pkg/errors"
 	"github.com/rcrowley/go-metrics"
@@ -60,11 +59,7 @@ func newAWSKMSClient(sess client.ConfigProvider, region, arn string) AWSKMSClien
 }
 
 // createAWSKMSClients creates a client for each region in the arn map.
-func createAWSKMSClients(arnMap map[string]string) ([]AWSKMSClient, error) {
-	sess, err := session.NewSession()
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to create new session")
-	}
+func createAWSKMSClients(arnMap map[string]string, sess client.ConfigProvider) ([]AWSKMSClient, error) {
 
 	clients := make([]AWSKMSClient, 0)
 
@@ -93,22 +88,22 @@ func sortClients(preferredRegion string, clients []AWSKMSClient) []AWSKMSClient 
 
 // NewAWS returns a new AWSKMS used for encrypting/decrypting
 // keys with a master key.
-func NewAWS(crypto appencryption.AEAD, preferredRegion string, arnMap map[string]string) (*AWSKMS, error) {
-	return newAWS(crypto, preferredRegion, awsARNMap(arnMap))
+func NewAWS(crypto appencryption.AEAD, preferredRegion string, arnMap map[string]string, sess client.ConfigProvider) (*AWSKMS, error) {
+	return newAWS(crypto, preferredRegion, awsARNMap(arnMap), sess)
 }
 
 type awsARNMap map[string]string
 
-func (a awsARNMap) createAWSKMSClients() ([]AWSKMSClient, error) {
-	return createAWSKMSClients(a)
+func (a awsARNMap) createAWSKMSClients(sess client.ConfigProvider) ([]AWSKMSClient, error) {
+	return createAWSKMSClients(a, sess)
 }
 
 type clientMapper interface {
-	createAWSKMSClients() ([]AWSKMSClient, error)
+	createAWSKMSClients(client.ConfigProvider) ([]AWSKMSClient, error)
 }
 
-func newAWS(crypto appencryption.AEAD, preferredRegion string, arnMap clientMapper) (*AWSKMS, error) {
-	clients, err := arnMap.createAWSKMSClients()
+func newAWS(crypto appencryption.AEAD, preferredRegion string, arnMap clientMapper, sess client.ConfigProvider) (*AWSKMS, error) {
+	clients, err := arnMap.createAWSKMSClients(sess)
 	if err != nil {
 		return nil, err
 	}
